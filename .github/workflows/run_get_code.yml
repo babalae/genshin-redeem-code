@@ -16,10 +16,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install httpx
+        run: pip install httpx requests
 
-      - name: Run get.py
+      - name: Run get.py (国服)
         run: python get.py
+
+      - name: Run hoyolab_crawler.py (国际服)
+        run: python hoyolab_crawler.py
 
       - name: Commit and push if changed
         run: |
