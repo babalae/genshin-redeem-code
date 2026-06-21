@@ -162,7 +162,7 @@ def update_time_file():
 
 def clean_expired(entries: list) -> list:
     """按 valid 字段清理已过期的兑换码"""
-    now = datetime.now(GenshinDataSource.TZ)
+    today = datetime.now(GenshinDataSource.TZ).date()
     kept = []
     removed = []
     for entry in entries:
@@ -172,10 +172,8 @@ def clean_expired(entries: list) -> list:
             kept.append(entry)
             continue
         try:
-            valid_date = datetime.strptime(valid_str, '%Y-%m-%d').replace(
-                tzinfo=GenshinDataSource.TZ
-            )
-            if now > valid_date:
+            valid_date = datetime.strptime(valid_str, '%Y-%m-%d').date()
+            if today > valid_date:
                 removed.append(entry)
             else:
                 kept.append(entry)
@@ -249,18 +247,23 @@ async def main():
     for c in new_codes:
         print(f'   [{c.get("items", "?")}] {c.get("code", "?")}')
 
-    # 构建新条目
-    new_entry = build_entry(live_data, new_codes)
-    if not new_entry['codes']:
-        print('⚠️ 没有可用的兑换码，跳过写入')
-        return
-
     # 加载现有数据
     existing = load_codes()
     print(f'\n📂 现有 codes.json 共 {len(existing)} 条记录')
 
     # 清理过期
-    existing = clean_expired(existing)
+    cleaned = clean_expired(existing)
+    has_expired = len(cleaned) != len(existing)
+    existing = cleaned
+
+    # 构建新条目
+    new_entry = build_entry(live_data, new_codes)
+    if not new_entry['codes']:
+        if has_expired:
+            save_codes(existing)
+            update_time_file()
+        print('⚠️ 没有可用的兑换码，跳过新增')
+        return
 
     # 去重：检查新条目中的码是否已存在
     existing_code_strs = get_existing_code_strings(existing)
@@ -270,6 +273,9 @@ async def main():
         print(f'⏭️ 以下兑换码已存在，跳过: {dup_codes}')
         # 如果全部重复，不写入
         if set(new_entry['codes']).issubset(existing_code_strs):
+            if has_expired:
+                save_codes(existing)
+                update_time_file()
             print('✅ 所有兑换码均已存在，无需更新')
             return
 

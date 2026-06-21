@@ -239,7 +239,7 @@ def update_time_file():
 def clean_expired(entries):
     """清理已过期的条目"""
     tz = timezone(timedelta(hours=8))
-    now = datetime.now(tz)
+    today = datetime.now(tz).date()
     kept = []
     for entry in entries:
         valid_str = entry.get('valid', '')
@@ -247,18 +247,27 @@ def clean_expired(entries):
             kept.append(entry)
             continue
         try:
-            valid_date = datetime.strptime(valid_str, '%Y-%m-%d').replace(tzinfo=tz)
-            if now <= valid_date:
+            valid_date = datetime.strptime(valid_str, '%Y-%m-%d').date()
+            if today <= valid_date:
                 kept.append(entry)
         except ValueError:
             kept.append(entry)
     return kept
 
 
-def merge_to_codes_json(new_entry):
+def merge_to_codes_json(new_entry=None):
     """合并新条目到 codes.json，仅与同 title 条目去重，国际服/国服互不干扰"""
     existing = load_codes_json()
-    existing = clean_expired(existing)
+    cleaned = clean_expired(existing)
+    has_expired = len(cleaned) != len(existing)
+    existing = cleaned
+
+    if new_entry is None:
+        if has_expired:
+            save_codes_json(existing)
+            update_time_file()
+            print('已将过期兑换码清理结果写入 codes.json')
+        return
 
     new_title = new_entry.get('title', '')
 
@@ -273,6 +282,10 @@ def merge_to_codes_json(new_entry):
     new_codes = new_entry.get('codes', [])
     fresh = [c for c in new_codes if c.lower() not in seen]
     if not fresh:
+        if has_expired:
+            save_codes_json(existing)
+            update_time_file()
+            print('已将过期兑换码清理结果写入 codes.json')
         print('[%s] 所有兑换码均已存在，跳过' % new_title)
         return
 
@@ -307,6 +320,7 @@ def main():
 
     if result is None:
         print('当前没有可用的兑换码。')
+        merge_to_codes_json()
         return
 
     # 4) 输出并写入 codes.json
