@@ -265,7 +265,6 @@ def merge_to_codes_json(new_entry=None):
     if new_entry is None:
         if has_expired:
             save_codes_json(existing)
-            update_time_file()
             print('已将过期兑换码清理结果写入 codes.json')
         return
 
@@ -284,7 +283,6 @@ def merge_to_codes_json(new_entry=None):
     if not fresh:
         if has_expired:
             save_codes_json(existing)
-            update_time_file()
             print('已将过期兑换码清理结果写入 codes.json')
         print('[%s] 所有兑换码均已存在，跳过' % new_title)
         return
