@@ -261,7 +261,6 @@ async def main():
     if not new_entry['codes']:
         if has_expired:
             save_codes(existing)
-            update_time_file()
         print('⚠️ 没有可用的兑换码，跳过新增')
         return
 
@@ -275,7 +274,6 @@ async def main():
         if set(new_entry['codes']).issubset(existing_code_strs):
             if has_expired:
                 save_codes(existing)
-                update_time_file()
             print('✅ 所有兑换码均已存在，无需更新')
             return
 
