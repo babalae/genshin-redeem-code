@@ -213,13 +213,13 @@ def build_entry(live_data: dict, new_codes: list) -> dict:
         'codes': code_strings,
     }
 
-    # 前瞻直播一般周五开播，兑换码下周一 12:00 过期
-    # 因为无法表达小时，写周二日期确保覆盖整个周一
+    # 兑换码在直播当天后第三天中午 12:00 过期（周五 → 周一 12:00，周六 → 周二 12:00）
+    # valid 只精确到日期，写到过期当天（直播当天 + 3 天）
     start_str = live_data.get('start', '')
     if start_str:
         try:
             start_date = datetime.strptime(start_str[:10], '%Y-%m-%d')
-            valid_date = start_date + timedelta(days=4)  # 周五 → 周二
+            valid_date = start_date + timedelta(days=3)  # 周五 → 周一
             entry['valid'] = valid_date.strftime('%Y-%m-%d')
         except ValueError:
             pass

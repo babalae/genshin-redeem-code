@@ -113,27 +113,6 @@ def format_bonus_name(bonus_num):
     return BONUS_NAME_MAP.get(int(bonus_num), '%d件物品' % int(bonus_num))
 
 
-def format_offline_date(offline_at_timestamp):
-    """
-    将 Unix 时间戳转为北京时间的日期字符串（用于 valid 字段）
-
-    Args:
-        offline_at_timestamp: 秒级 Unix 时间戳
-
-    Returns:
-        str: 例如 '2026-06-21'，失败返回空字符串
-    """
-    try:
-        ts = int(offline_at_timestamp)
-        if ts <= 0:
-            return ''
-        tz = timezone(timedelta(hours=8))
-        dt = datetime.fromtimestamp(ts, tz=tz)
-        return dt.strftime('%Y-%m-%d')
-    except (ValueError, TypeError, OSError):
-        return ''
-
-
 def process_codes(groups, game_id):
     """
     处理兑换码分组，筛选有效码并构建为 get.py 相同格式的条目
@@ -153,11 +132,9 @@ def process_codes(groups, game_id):
     all_code_strings = []
     # { per_code_bonus_num: total } — 按 bonus_num 聚合
     aggregated = {}
-    earliest_offline = None
 
     for group in groups:
         bonuses = group.get('bonuses', [])
-        offline_at = group.get('offline_at', 0)
 
         for b in bonuses:
             code_str = b.get('exchange_code', '').strip()
@@ -169,14 +146,6 @@ def process_codes(groups, game_id):
             for item in b.get('icon_bonuses', []):
                 num = int(item.get('bonus_num', 0))
                 aggregated[num] = aggregated.get(num, 0) + num
-
-        # 取最早的过期时间
-        try:
-            ts = int(offline_at)
-            if ts > 0 and (earliest_offline is None or ts < earliest_offline):
-                earliest_offline = ts
-        except (ValueError, TypeError):
-            pass
 
     if not all_code_strings:
         return None
@@ -197,10 +166,10 @@ def process_codes(groups, game_id):
         'codes': all_code_strings,
     }
 
-    # valid: 基于最早的 offline_at
-    valid_date = format_offline_date(earliest_offline) if earliest_offline else ''
-    if valid_date:
-        entry['valid'] = valid_date
+    # 兑换码在直播当天后第三天中午 12:00 过期（周五 → 周一 12:00，周六 → 周二 12:00）
+    # 脚本在直播当天运行；valid 只精确到日期，写到过期当天（直播当天 + 3 天）
+    today = datetime.now(tz).date()
+    entry['valid'] = (today + timedelta(days=3)).strftime('%Y-%m-%d')
 
     return entry
 
