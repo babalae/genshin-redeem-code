@@ -129,18 +129,40 @@ def process_codes(groups, game_id):
               {'title', 'content', 'time', 'codes', 'valid'}，
               无有效兑换码时返回 None
     """
+    tz = timezone(timedelta(hours=8))
+    now = datetime.now(tz)
     all_code_strings = []
+    seen = set()
+    expire_times = []
     # { per_code_bonus_num: total } — 按 bonus_num 聚合
     aggregated = {}
 
     for group in groups:
+        if str(group.get('game_id', game_id)) != str(game_id):
+            continue
         bonuses = group.get('bonuses', [])
 
         for b in bonuses:
             code_str = b.get('exchange_code', '').strip()
             status = b.get('code_status', '')
-            if not code_str or status != 'ON':
+            if not code_str or status != 'ON' or code_str.lower() in seen:
                 continue
+
+            # 优先使用兑换码自身的下线时间，其次使用分组时间。
+            expires_at = None
+            for value in (b.get('offline_at'), group.get('offline_at')):
+                try:
+                    if int(value) > 0:
+                        expires_at = datetime.fromtimestamp(int(value), tz)
+                        break
+                except (TypeError, ValueError, OverflowError, OSError):
+                    continue
+            if expires_at is not None:
+                if expires_at <= now:
+                    continue
+                expire_times.append(expires_at)
+
+            seen.add(code_str.lower())
             all_code_strings.append(code_str)
 
             for item in b.get('icon_bonuses', []):
@@ -157,19 +179,17 @@ def process_codes(groups, game_id):
         items_parts.append('%s*%d' % (name, total))
     content = ' + '.join(items_parts)
 
-    tz = timezone(timedelta(hours=8))
-
     entry = {
         'title': '[国际服]前瞻直播',
         'content': content,
-        'time': datetime.now(tz).strftime('%Y-%m-%d %H:%M'),
+        'time': now.strftime('%Y-%m-%d %H:%M'),
         'codes': all_code_strings,
     }
 
-    # 兑换码在直播当天后第三天中午 12:00 过期（周五 → 周一 12:00，周六 → 周二 12:00）
-    # 脚本在直播当天运行；valid 只精确到日期，写到过期当天（直播当天 + 3 天）
-    today = datetime.now(tz).date()
-    entry['valid'] = (today + timedelta(days=3)).strftime('%Y-%m-%d')
+    # 保持 valid 的日期格式；无有效 API 时间时才沿用三天的兜底值。
+    # 同条目中有不同到期时间时取最早值，避免展示已部分失效的礼包。
+    expires_at = min(expire_times) if expire_times else now + timedelta(days=3)
+    entry['valid'] = expires_at.strftime('%Y-%m-%d')
 
     return entry
 
@@ -225,42 +245,71 @@ def clean_expired(entries):
 
 
 def merge_to_codes_json(new_entry=None):
-    """合并新条目到 codes.json，仅与同 title 条目去重，国际服/国服互不干扰"""
+    """将同场直播更新到一条记录，国服及其他场次互不干扰。"""
     existing = load_codes_json()
-    cleaned = clean_expired(existing)
-    has_expired = len(cleaned) != len(existing)
-    existing = cleaned
+    updated = list(existing)
 
-    if new_entry is None:
-        if has_expired:
-            save_codes_json(existing)
-            print('已将过期兑换码清理结果写入 codes.json')
+    if new_entry is not None:
+        new_title = new_entry.get('title', '')
+        new_codes = {c.lower() for c in new_entry.get('codes', [])}
+        new_day = new_entry.get('time', '')[:10]
+        new_valid = new_entry.get('valid', '')
+
+        # API 没有可用的场次 ID：用共有兑换码、相同有效期或采集日识别本场。
+        # 先合并后清理，避免相同的过期码被当成新场次、重新延长有效期。
+        matches = []
+        for index, entry in enumerate(existing):
+            if entry.get('title', '') != new_title:
+                continue
+            shared_codes = new_codes.intersection(c.lower() for c in entry.get('codes', []))
+            if (shared_codes
+                    or (new_valid and entry.get('valid') == new_valid)
+                    or (new_day and entry.get('time', '')[:10] == new_day)):
+                matches.append(index)
+
+        if matches:
+            # 旧脚本每次写入的是累计奖励，历史拆条以最后一条的奖励为基准。
+            latest = max(matches, key=lambda i: existing[i].get('time', ''))
+            merged = dict(existing[latest])
+            sources = [existing[i] for i in matches] + [new_entry]
+        else:
+            merged = dict(new_entry)
+            sources = [new_entry]
+
+        codes = {}
+        for source in sources:
+            for code in source.get('codes', []):
+                codes.setdefault(code.lower(), code)
+        merged['codes'] = list(codes.values())
+
+        # 完整快照才覆盖累计奖励；接口暂时少返回码时保留此前的奖励。
+        if set(codes).issubset(new_codes):
+            merged['content'] = new_entry.get('content', '')
+
+        for field in ('time', 'valid'):
+            values = [source[field] for source in sources if source.get(field)]
+            if values:
+                merged[field] = min(values)
+
+        if matches:
+            matched_indexes = set(matches)
+            updated = []
+            for index, entry in enumerate(existing):
+                if index == matches[0]:
+                    updated.append(merged)
+                elif index not in matched_indexes:
+                    updated.append(entry)
+        else:
+            updated.append(merged)
+
+    updated = clean_expired(updated)
+    if updated == existing:
+        print('兑换码无变化，跳过写入')
         return
 
-    new_title = new_entry.get('title', '')
-
-    # 只收集同 title 条目下的已有兑换码（大小写不敏感）
-    seen = set()
-    for entry in existing:
-        if entry.get('title', '') == new_title:
-            for c in entry.get('codes', []):
-                seen.add(c.lower())
-
-    # 去重
-    new_codes = new_entry.get('codes', [])
-    fresh = [c for c in new_codes if c.lower() not in seen]
-    if not fresh:
-        if has_expired:
-            save_codes_json(existing)
-            print('已将过期兑换码清理结果写入 codes.json')
-        print('[%s] 所有兑换码均已存在，跳过' % new_title)
-        return
-
-    new_entry['codes'] = fresh
-    existing.append(new_entry)
-    save_codes_json(existing)
+    save_codes_json(updated)
     update_time_file()
-    print('[%s] 已写入 codes.json: %s' % (new_title, fresh))
+    print('已合并并更新 codes.json')
 
 
 def main():
